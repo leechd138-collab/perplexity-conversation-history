@@ -2,18 +2,178 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Conversation History</title>
-  <link rel="stylesheet" href="styles.css">
+  <title>NaughtyBits Dashboard</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 420px;
+      max-height: 600px;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: #0d1117;
+      color: #c9d1d9;
+      font-size: 13px;
+      overflow-y: auto;
+    }
+    .header {
+      background: linear-gradient(135deg, #161b22, #1c2333);
+      padding: 14px 16px;
+      border-bottom: 1px solid #30363d;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .header h1 { font-size: 16px; font-weight: 600; color: #58a6ff; }
+    .header .version { font-size: 11px; color: #484f58; }
+
+    .service-panel {
+      padding: 10px 16px;
+      background: #161b22;
+      border-bottom: 1px solid #21262d;
+    }
+    .service-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .service-row:last-child { margin-bottom: 0; }
+    .status-dot {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      margin-right: 6px;
+    }
+    .status-dot.online { background: #3fb950; }
+    .status-dot.offline { background: #f85149; }
+    .status-dot.warning { background: #d29922; }
+    .svc-label { font-size: 12px; }
+    .svc-btn {
+      padding: 4px 12px;
+      border-radius: 4px;
+      border: 1px solid #30363d;
+      background: #21262d;
+      color: #c9d1d9;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .svc-btn:hover { border-color: #58a6ff; }
+    .svc-btn.active { background: #0d4429; color: #3fb950; border-color: #238636; }
+    .svc-btn.danger { background: #4a1e1e; color: #f85149; border-color: #da3633; }
+    .svc-hint {
+      font-size: 10px;
+      color: #484f58;
+      margin-top: 4px;
+      line-height: 1.4;
+    }
+
+    .section {
+      padding: 10px 16px;
+      border-bottom: 1px solid #21262d;
+    }
+    .section-title {
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.5px; color: #8b949e; margin-bottom: 8px;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .count {
+      background: #30363d; color: #58a6ff;
+      padding: 1px 8px; border-radius: 10px; font-size: 11px;
+    }
+    .memo-item, .proc-item {
+      background: #161b22; border: 1px solid #21262d;
+      border-radius: 6px; padding: 8px 10px;
+      margin-bottom: 6px; font-size: 12px; line-height: 1.4;
+    }
+    .memo-id { color: #58a6ff; font-weight: 600; font-size: 11px; }
+    .memo-date { color: #484f58; font-size: 10px; float: right; }
+    .memo-tags { margin-top: 4px; }
+    .memo-tags span {
+      background: #1f3a5f; color: #58a6ff;
+      padding: 1px 6px; border-radius: 3px;
+      font-size: 10px; margin-right: 4px;
+    }
+    .memo-text { margin-top: 4px; color: #c9d1d9; word-break: break-word; }
+    .del-btn {
+      background: none; border: none; color: #f85149;
+      cursor: pointer; font-size: 10px; float: right; margin-left: 8px;
+    }
+    .del-btn:hover { text-decoration: underline; }
+    .proc-status {
+      display: inline-block; padding: 1px 6px; border-radius: 3px;
+      font-size: 10px; font-weight: 600;
+    }
+    .proc-status.running { background: #0d4429; color: #3fb950; }
+    .proc-status.killed, .proc-status.failed { background: #4a1e1e; color: #f85149; }
+    .proc-status.exited, .proc-status.stopped { background: #3d2e00; color: #d29922; }
+    .empty { color: #484f58; font-style: italic; font-size: 12px; padding: 8px 0; }
+
+    .actions {
+      padding: 10px 16px;
+      display: flex; gap: 8px;
+    }
+    .actions button {
+      flex: 1; padding: 6px 12px;
+      border: 1px solid #30363d; border-radius: 6px;
+      background: #21262d; color: #c9d1d9; font-size: 12px; cursor: pointer;
+    }
+    .actions button:hover { background: #30363d; border-color: #58a6ff; }
+    .actions button.danger { border-color: #f85149; color: #f85149; }
+    .actions button.danger:hover { background: #4a1e1e; }
+
+    #briefingPreview {
+      background: #0d1117; border: 1px solid #21262d; border-radius: 6px;
+      padding: 8px; font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 10px; color: #8b949e; max-height: 200px;
+      overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+      display: none; margin: 0 16px 10px;
+    }
+  </style>
 </head>
 <body>
-  <div class="container">
-    <h1>Perplexity Conversations</h1>
-    <div class="controls">
-      <button id="refreshBtn" class="btn">Refresh</button>
-      <button id="clearBtn" class="btn">Clear</button>
-    </div>
-    <div id="conversationList" class="list"></div>
+  <div class="header">
+    <h1>NaughtyBits</h1>
+    <span class="version">v2.0.0</span>
   </div>
+
+  <!-- Service Status -->
+  <div class="service-panel">
+    <div class="service-row">
+      <div>
+        <span class="status-dot offline" id="serviceDot"></span>
+        <span class="svc-label" id="serviceLabel">Host: checking...</span>
+      </div>
+      <div>
+        <button class="svc-btn" id="checkBtn" style="margin-right:4px">Check</button>
+        <button class="svc-btn" id="approveBtn">Approve</button>
+      </div>
+    </div>
+    <div class="svc-hint" id="serviceHint"></div>
+  </div>
+
+  <!-- Memos -->
+  <div class="section">
+    <div class="section-title">
+      Memos <span class="count" id="memoCount">0</span>
+    </div>
+    <div id="memoList"></div>
+  </div>
+
+  <!-- Processes -->
+  <div class="section">
+    <div class="section-title">
+      Processes <span class="count" id="procCount">0</span>
+    </div>
+    <div id="procList"></div>
+  </div>
+
+  <div class="actions">
+    <button id="refreshBtn">Refresh</button>
+    <button id="briefingBtn">View Briefing</button>
+    <button id="clearMemosBtn" class="danger">Clear Memos</button>
+  </div>
+
+  <pre id="briefingPreview"></pre>
+
   <script src="popup.js"></script>
 </body>
 </html>
