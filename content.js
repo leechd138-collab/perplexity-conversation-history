@@ -5,6 +5,7 @@
 // 1. Tail the assistant's DOM output for /naughtybits commands
 // 2. Request briefing injection on load (routed through background -> MAIN world)
 // 3. Route parsed commands to the background service worker
+// 4. Gather input element info for wminject targeting
 //
 // IMPORTANT: This script CANNOT directly manipulate ProseMirror/React state
 // because it runs in the isolated world. All chat injection goes through
@@ -91,6 +92,62 @@
       return { ok: false, error: err.message };
     }
   }
+
+  // ============================================================
+  // INPUT ELEMENT LOCATOR
+  // Finds the target input element and gathers identifying info
+  // that the native host can use via UI Automation to target it
+  // even when Chrome is in the background.
+  // ============================================================
+  function locateInputElement() {
+    const selectors = [
+      '#ask-input',
+      '[data-lexical-editor="true"]',
+      'div[contenteditable="true"][role="textbox"]',
+      '[role="textbox"][contenteditable="true"]',
+      'div[contenteditable="true"]'
+    ];
+
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        const info = {
+          found: true,
+          id: el.id || '',
+          role: el.getAttribute('role') || '',
+          ariaLabel: el.getAttribute('aria-label') || '',
+          tagName: el.tagName.toLowerCase(),
+          contentEditable: el.getAttribute('contenteditable') || '',
+          dataLexicalEditor: el.getAttribute('data-lexical-editor') || '',
+          selector: sel,
+          // Bounding rect relative to viewport
+          rect: {
+            x: Math.round(rect.x),
+            y: Math.round(rect.y),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height)
+          },
+          // Page info for matching
+          pageTitle: document.title,
+          pageUrl: window.location.href
+        };
+        LOG('Located input element:', info);
+        return info;
+      }
+    }
+
+    LOG('No input element found');
+    return { found: false };
+  }
+
+  // Listen for requests from background.js to locate the input
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === 'nb_locate_input') {
+      const info = locateInputElement();
+      sendResponse(info);
+    }
+  });
 
   // ============================================================
   // DOM TAILING — watch assistant output for /naughtybits commands

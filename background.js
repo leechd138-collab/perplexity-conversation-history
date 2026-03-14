@@ -1,6 +1,6 @@
-// NaughtyBits Background Service Worker v2.0.0
+// NaughtyBits Background Service Worker v2.1.0
 // Central hub: memo storage, process registry, MAIN world injection,
-// and Native Messaging bridge to the local host process.
+// Native Messaging bridge to the local host process, and wminject routing.
 //
 // ARCHITECTURE:
 // Extension <-> background.js <-> Native Messaging <-> naughtybits_host.exe
@@ -228,6 +228,67 @@ function getProcesses() { return [...processes]; }
 function getRunningProcesses() { return processes.filter(p => p.status === 'running'); }
 
 // ============================================================
+// WMINJECT — OS-level injection via native host
+// The extension locates the input element and gathers its
+// accessibility info + Chrome window details. The native host
+// uses UI Automation to find and write to the exact element,
+// even when Chrome is in the background.
+// ============================================================
+async function wminject(text, tabId) {
+  console.log(`[NB] wminject: gathering element info from tab ${tabId}`);
+
+  // Step 1: Ask content.js to locate the input element
+  let elementInfo;
+  try {
+    elementInfo = await chrome.tabs.sendMessage(tabId, { action: 'nb_locate_input' });
+  } catch (err) {
+    console.log('[NB] wminject: content script not reachable, element info unavailable');
+    elementInfo = { found: false };
+  }
+
+  // Step 2: Get Chrome window info (position, size, state)
+  const tab = await chrome.tabs.get(tabId);
+  const win = await chrome.windows.get(tab.windowId);
+
+  // Step 3: Make sure this tab is the active tab in its window
+  // (UI Automation can only see the active tab's accessibility tree)
+  if (tab.id !== undefined) {
+    await chrome.tabs.update(tabId, { active: true });
+    // Small delay to let Chrome activate the tab and build the a11y tree
+    await new Promise(r => setTimeout(r, 300));
+  }
+
+  // Step 4: Send everything to the native host
+  const hostMessage = {
+    op: 'wminject',
+    text: text,
+    // Chrome window info
+    windowState: win.state,       // "normal", "minimized", "maximized", "fullscreen"
+    windowLeft: win.left,
+    windowTop: win.top,
+    windowWidth: win.width,
+    windowHeight: win.height,
+    // Tab info
+    tabTitle: tab.title || '',
+    tabUrl: tab.url || '',
+    tabIndex: tab.index,
+    // Element info from content.js
+    elementFound: elementInfo.found || false,
+    elementId: elementInfo.id || '',
+    elementRole: elementInfo.role || 'textbox',
+    elementAriaLabel: elementInfo.ariaLabel || '',
+    elementTag: elementInfo.tagName || 'div',
+    elementRect: elementInfo.rect || null,
+    pageTitle: elementInfo.pageTitle || tab.title || ''
+  };
+
+  console.log('[NB] wminject: sending to native host:', hostMessage);
+  const result = await sendToHost(hostMessage);
+  console.log('[NB] wminject: host response:', result);
+  return result;
+}
+
+// ============================================================
 // BRIEFING BUILDER
 // Every new instance gets the full man page + all memos + process state.
 // No conditions. Always. Every time.
@@ -237,7 +298,7 @@ function buildBriefing() {
 
   L.push('=== NAUGHTYBITS v2.0 SYSTEM BRIEFING ===');
   L.push('');
-  L.push('You have NaughtyBits installed — a persistent memory and process management companion extension.');
+  L.push('You have NaughtyBits installed \u2014 a persistent memory and process management companion extension.');
   L.push('It watches your output text in real time. When you write a /naughtybits command in your response,');
   L.push('the extension intercepts it and executes it immediately.');
   L.push('');
@@ -249,23 +310,23 @@ function buildBriefing() {
   L.push('Write them on their own line in your response. The extension parses them from your output.');
   L.push('');
   L.push('MEMO COMMANDS:');
-  L.push('  /naughtybits addmemo <text>                — Save a memo for future sessions');
-  L.push('  /naughtybits addmemo [tag1,tag2] <text>    — Save a memo with tags');
-  L.push('  /naughtybits delmemo <id>                   — Delete a memo by its numeric ID');
-  L.push('  /naughtybits listmemos                      — Dump all memos');
-  L.push('  /naughtybits searchmemos <query>            — Search memos by text or tag');
+  L.push('  /naughtybits addmemo <text>                \u2014 Save a memo for future sessions');
+  L.push('  /naughtybits addmemo [tag1,tag2] <text>    \u2014 Save a memo with tags');
+  L.push('  /naughtybits delmemo <id>                   \u2014 Delete a memo by its numeric ID');
+  L.push('  /naughtybits listmemos                      \u2014 Dump all memos');
+  L.push('  /naughtybits searchmemos <query>            \u2014 Search memos by text or tag');
   L.push('');
   L.push('PROCESS COMMANDS (requires NaughtyBits host service):');
-  L.push('  /naughtybits exec <command>                 — Execute a command and return output');
-  L.push('  /naughtybits spawn <command>                — Spawn a long-running process');
-  L.push('  /naughtybits kill <id>                      — Kill a tracked process');
-  L.push('  /naughtybits ps                             — List all tracked processes');
+  L.push('  /naughtybits exec <command>                 \u2014 Execute a command and return output');
+  L.push('  /naughtybits spawn <command>                \u2014 Spawn a long-running process');
+  L.push('  /naughtybits kill <id>                      \u2014 Kill a tracked process');
+  L.push('  /naughtybits ps                             \u2014 List all tracked processes');
   L.push('');
 
   // ---- SERVICE STATUS ----
   L.push('## HOST SERVICE STATUS');
-  L.push(`  Connected: ${serviceConnected ? 'YES' : 'NO — the NaughtyBits host service is not running or not installed'}`);
-  L.push(`  Approved:  ${serviceApproved ? 'YES' : 'NO — user must approve in the NaughtyBits popup'}`);
+  L.push(`  Connected: ${serviceConnected ? 'YES' : 'NO \u2014 the NaughtyBits host service is not running or not installed'}`);
+  L.push(`  Approved:  ${serviceApproved ? 'YES' : 'NO \u2014 user must approve in the NaughtyBits popup'}`);
   L.push('  NOTE: exec/spawn/kill require both: host connected + approved.');
   L.push('  Memo commands work regardless of host status (stored in extension).');
   L.push('');
@@ -274,7 +335,7 @@ function buildBriefing() {
   L.push('## OPERATING RULES');
   L.push('');
   L.push('1. ALWAYS save memos about what you are working on. Every action, decision, bug, design choice.');
-  L.push('2. Treat memos as your personal work journal — the next instance reads these to get up to speed.');
+  L.push('2. Treat memos as your personal work journal \u2014 the next instance reads these to get up to speed.');
   L.push('3. Be SPECIFIC: file names, function names, error messages, architectural decisions, next steps.');
   L.push('4. When you finish a task or hit a stopping point, write a summary memo.');
   L.push('5. On session start, READ the memos below and pick up where the last instance left off.');
@@ -307,7 +368,7 @@ function buildBriefing() {
     L.push(`## RUNNING PROCESSES (${running.length})`);
     L.push('');
     running.forEach(p => {
-      L.push(`  #${p.id} [PID: ${p.pid || '?'}] ${p.command} — since ${new Date(p.started).toLocaleString()}`);
+      L.push(`  #${p.id} [PID: ${p.pid || '?'}] ${p.command} \u2014 since ${new Date(p.started).toLocaleString()}`);
     });
     L.push('');
   }
@@ -346,6 +407,18 @@ async function injectBriefingIntoTab(tabId) {
   const briefing = buildBriefing();
   console.log(`[NB] Injecting briefing into tab ${tabId} (${briefing.length} chars)`);
 
+  // Try wminject first if host is connected \u2014 works even in background
+  if (serviceApproved && serviceConnected) {
+    console.log('[NB] Attempting wminject (OS-level) first...');
+    const wmResult = await wminject(briefing, tabId);
+    if (wmResult && wmResult.ok) {
+      console.log('[NB] wminject succeeded');
+      return { ok: true, method: 'wminject' };
+    }
+    console.log('[NB] wminject failed, falling back to MAIN world injection:', wmResult);
+  }
+
+  // Fallback: MAIN world injection via chrome.scripting.executeScript
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
@@ -353,19 +426,7 @@ async function injectBriefingIntoTab(tabId) {
       func: (text) => {
         console.log('[NB-MAIN] Injector running, text length:', text.length);
 
-        // ============================================================
-        // LEXICAL EDITOR INJECTION
-        // Perplexity uses Lexical (Meta's editor framework).
-        // The input is: div#ask-input[data-lexical-editor="true"]
-        // Lexical ignores direct DOM mutations — we must go through
-        // its internal state. The most reliable approaches:
-        //   1. Synthetic InputEvent with inputType + data
-        //   2. Synthetic ClipboardEvent (paste)
-        //   3. Simulated keystrokes character-by-character (slow fallback)
-        // ============================================================
-
         function findInput() {
-          // Precise selector first, then progressively broader
           return document.querySelector('#ask-input')
               || document.querySelector('[data-lexical-editor="true"]')
               || document.querySelector('div[contenteditable="true"][role="textbox"]')
@@ -381,30 +442,24 @@ async function injectBriefingIntoTab(tabId) {
           }
           console.log('[NB-MAIN] Found input:', input.id, input.tagName, input.className.substring(0, 60));
 
-          // Guard: if user is already typing, don't clobber their input
           const existing = input.textContent.trim();
           if (existing.length > 0) {
             console.log('[NB-MAIN] Input not empty, user may be typing. Skipping injection.');
-            return true; // return true to stop retrying
+            return true;
           }
 
           input.focus();
-          // Small delay to let Lexical register the focus
           await new Promise(r => setTimeout(r, 100));
 
           let injected = false;
 
-          // ---- STRATEGY 1: Synthetic paste (most reliable for Lexical) ----
-          // Lexical listens for paste events on the contenteditable root.
-          // It reads from clipboardData and inserts as plain text.
+          // Strategy 1: Synthetic paste
           if (!injected) {
             try {
               const dt = new DataTransfer();
               dt.setData('text/plain', text);
               const pasteEvent = new ClipboardEvent('paste', {
-                bubbles: true,
-                cancelable: true,
-                clipboardData: dt
+                bubbles: true, cancelable: true, clipboardData: dt
               });
               input.dispatchEvent(pasteEvent);
               await new Promise(r => setTimeout(r, 200));
@@ -412,49 +467,26 @@ async function injectBriefingIntoTab(tabId) {
                 injected = true;
                 console.log('[NB-MAIN] Strategy 1 (synthetic paste) succeeded');
               }
-            } catch (e) {
-              console.log('[NB-MAIN] Strategy 1 failed:', e.message);
-            }
+            } catch (e) { console.log('[NB-MAIN] Strategy 1 failed:', e.message); }
           }
 
-          // ---- STRATEGY 2: InputEvent with insertText ----
-          // Lexical also listens for beforeinput events with inputType="insertText".
-          // This is how the browser normally communicates typed text to the editor.
+          // Strategy 2: InputEvent insertText
           if (!injected) {
             try {
-              // First clear any selection
               const sel = window.getSelection();
               sel.selectAllChildren(input);
               sel.collapseToStart();
-
-              const beforeInput = new InputEvent('beforeinput', {
-                bubbles: true,
-                cancelable: true,
-                inputType: 'insertText',
-                data: text
-              });
-              input.dispatchEvent(beforeInput);
-
-              const inputEvent = new InputEvent('input', {
-                bubbles: true,
-                cancelable: false,
-                inputType: 'insertText',
-                data: text
-              });
-              input.dispatchEvent(inputEvent);
-
+              input.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: text }));
+              input.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: false, inputType: 'insertText', data: text }));
               await new Promise(r => setTimeout(r, 200));
               if (input.textContent.trim().length > 0) {
                 injected = true;
                 console.log('[NB-MAIN] Strategy 2 (InputEvent insertText) succeeded');
               }
-            } catch (e) {
-              console.log('[NB-MAIN] Strategy 2 failed:', e.message);
-            }
+            } catch (e) { console.log('[NB-MAIN] Strategy 2 failed:', e.message); }
           }
 
-          // ---- STRATEGY 3: execCommand insertText ----
-          // Older but sometimes still works if the editor hooks it.
+          // Strategy 3: execCommand insertText
           if (!injected) {
             try {
               input.focus();
@@ -465,25 +497,15 @@ async function injectBriefingIntoTab(tabId) {
                 injected = true;
                 console.log('[NB-MAIN] Strategy 3 (execCommand insertText) succeeded');
               }
-            } catch (e) {
-              console.log('[NB-MAIN] Strategy 3 failed:', e.message);
-            }
+            } catch (e) { console.log('[NB-MAIN] Strategy 3 failed:', e.message); }
           }
 
-          // ---- STRATEGY 4: insertFromPaste via beforeinput ----
-          // Some Lexical builds listen specifically for the paste inputType.
+          // Strategy 4: insertFromPaste via beforeinput
           if (!injected) {
             try {
               const pasteInput = new InputEvent('beforeinput', {
-                bubbles: true,
-                cancelable: true,
-                inputType: 'insertFromPaste',
-                data: text,
-                dataTransfer: (() => {
-                  const dt = new DataTransfer();
-                  dt.setData('text/plain', text);
-                  return dt;
-                })()
+                bubbles: true, cancelable: true, inputType: 'insertFromPaste', data: text,
+                dataTransfer: (() => { const dt = new DataTransfer(); dt.setData('text/plain', text); return dt; })()
               });
               input.dispatchEvent(pasteInput);
               await new Promise(r => setTimeout(r, 200));
@@ -491,12 +513,10 @@ async function injectBriefingIntoTab(tabId) {
                 injected = true;
                 console.log('[NB-MAIN] Strategy 4 (insertFromPaste beforeinput) succeeded');
               }
-            } catch (e) {
-              console.log('[NB-MAIN] Strategy 4 failed:', e.message);
-            }
+            } catch (e) { console.log('[NB-MAIN] Strategy 4 failed:', e.message); }
           }
 
-          // ---- STRATEGY 5: Clipboard API write then execCommand paste ----
+          // Strategy 5: Clipboard API + execCommand paste
           if (!injected) {
             try {
               await navigator.clipboard.writeText(text);
@@ -507,29 +527,20 @@ async function injectBriefingIntoTab(tabId) {
                 injected = true;
                 console.log('[NB-MAIN] Strategy 5 (clipboard API + execCommand paste) succeeded');
               }
-            } catch (e) {
-              console.log('[NB-MAIN] Strategy 5 failed:', e.message);
-            }
+            } catch (e) { console.log('[NB-MAIN] Strategy 5 failed:', e.message); }
           }
 
-          // ---- STRATEGY 6: Simulate keystrokes character by character ----
-          // Slow but guaranteed to work if the editor is listening for key events.
-          // We only use this for a truncated briefing to keep it under ~200 chars.
+          // Strategy 6: Keystroke simulation (truncated)
           if (!injected) {
             try {
               console.log('[NB-MAIN] Strategy 6: Simulating keystrokes (truncated)...');
               input.focus();
-              // Use a short version — full briefing would take too long
-              const shortText = text.length > 500 ? text.substring(0, 500) + '\n[briefing truncated — see extension popup for full text]' : text;
+              const shortText = text.length > 500 ? text.substring(0, 500) + '\n[briefing truncated]' : text;
               for (const ch of shortText) {
                 const opts = { key: ch, code: 'Key' + ch.toUpperCase(), bubbles: true, cancelable: true };
                 input.dispatchEvent(new KeyboardEvent('keydown', opts));
-                input.dispatchEvent(new InputEvent('beforeinput', {
-                  bubbles: true, cancelable: true, inputType: 'insertText', data: ch
-                }));
-                input.dispatchEvent(new InputEvent('input', {
-                  bubbles: true, cancelable: false, inputType: 'insertText', data: ch
-                }));
+                input.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: ch }));
+                input.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: false, inputType: 'insertText', data: ch }));
                 input.dispatchEvent(new KeyboardEvent('keyup', opts));
               }
               await new Promise(r => setTimeout(r, 300));
@@ -537,26 +548,17 @@ async function injectBriefingIntoTab(tabId) {
                 injected = true;
                 console.log('[NB-MAIN] Strategy 6 (keystroke simulation) succeeded');
               }
-            } catch (e) {
-              console.log('[NB-MAIN] Strategy 6 failed:', e.message);
-            }
+            } catch (e) { console.log('[NB-MAIN] Strategy 6 failed:', e.message); }
           }
 
-          console.log('[NB-MAIN] Injection result:', injected,
-            'content length:', input.textContent.trim().length);
+          console.log('[NB-MAIN] Injection result:', injected, 'content length:', input.textContent.trim().length);
 
           if (!injected) {
-            console.log('[NB-MAIN] ALL STRATEGIES FAILED. DOM dump for debugging:');
-            console.log('[NB-MAIN] input.outerHTML:', input.outerHTML.substring(0, 300));
-            console.log('[NB-MAIN] input.id:', input.id);
-            console.log('[NB-MAIN] data-lexical-editor:', input.getAttribute('data-lexical-editor'));
-            return true; // stop retrying — it's a strategy issue not a timing issue
+            console.log('[NB-MAIN] ALL STRATEGIES FAILED.');
+            return true;
           }
 
-          // === SUBMIT ===
-          // The Submit button (aria-label="Submit") starts disabled and
-          // enables once Lexical's internal state has content.
-          // Poll for it to become enabled after injection.
+          // Submit
           let submitAttempts = 0;
           const submitInterval = setInterval(() => {
             const btn = document.querySelector('button[aria-label="Submit"]');
@@ -569,10 +571,7 @@ async function injectBriefingIntoTab(tabId) {
               const inp = findInput();
               if (inp) {
                 inp.focus();
-                const enterOpts = {
-                  key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-                  bubbles: true, cancelable: true
-                };
+                const enterOpts = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
                 inp.dispatchEvent(new KeyboardEvent('keydown', enterOpts));
                 inp.dispatchEvent(new KeyboardEvent('keypress', enterOpts));
                 inp.dispatchEvent(new KeyboardEvent('keyup', enterOpts));
@@ -584,7 +583,6 @@ async function injectBriefingIntoTab(tabId) {
           return true;
         }
 
-        // Retry finding the input element up to 20 times (20 seconds)
         async function runWithRetry() {
           if (await tryInject()) return;
           let attempts = 0;
@@ -599,7 +597,7 @@ async function injectBriefingIntoTab(tabId) {
       },
       args: [briefing]
     });
-    return { ok: true };
+    return { ok: true, method: 'main_world' };
   } catch (err) {
     console.error('[NB] Injection failed:', err);
     return { ok: false, error: err.message };
@@ -631,7 +629,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       break;
     }
 
-    // --- Process ops (async — routes through native host) ---
+    // --- Process ops (async) ---
     case 'nb_exec': {
       execCommand(request.command).then(r => sendResponse(r));
       return true;
@@ -649,6 +647,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       break;
     }
 
+    // --- wminject (OS-level text injection via native host) ---
+    case 'nb_wminject': {
+      const tabId = request.tabId || (sender.tab && sender.tab.id);
+      if (!tabId) {
+        sendResponse({ ok: false, error: 'No tab ID for wminject' });
+        break;
+      }
+      wminject(request.text, tabId).then(r => sendResponse(r));
+      return true;
+    }
+
     // --- Service config ---
     case 'nb_approve_service': {
       serviceApproved = true;
@@ -660,7 +669,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     case 'nb_revoke_service': {
       serviceApproved = false;
-      // Disconnect the native port
       if (nativePort) {
         nativePort.disconnect();
         nativePort = null;
@@ -671,16 +679,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       break;
     }
     case 'nb_service_status': {
-      // Quick status check without reconnecting
-      sendResponse({
-        ok: true,
-        connected: serviceConnected,
-        approved: serviceApproved
-      });
+      sendResponse({ ok: true, connected: serviceConnected, approved: serviceApproved });
       break;
     }
     case 'nb_service_check': {
-      // Active health check — tries to connect and ping
       checkHostHealth().then(connected => {
         sendResponse({ ok: true, connected, approved: serviceApproved });
       });
@@ -728,4 +730,4 @@ loadState().then(() => {
     checkHostHealth();
   }
 });
-console.log('[NB] Background service worker v2.0.0 started');
+console.log('[NB] Background service worker v2.1.0 started');
