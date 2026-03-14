@@ -209,6 +209,17 @@
 
     // Initial scan of any existing content
     scanElement(document.body);
+
+    // Listen for diagnostic results from MAIN world scanner
+    window.addEventListener('message', (event) => {
+      if (event.data && event.data.type === 'NB_DIAG_COMPLETE') {
+        LOG('Received diagnostic results from MAIN world:', event.data.log.length, 'lines');
+        chrome.storage.local.set({
+          nb_diag_log: event.data.log,
+          nb_diag_running: false
+        });
+      }
+    });
   }
 
   if (document.readyState === 'loading') {

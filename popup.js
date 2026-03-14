@@ -176,86 +176,212 @@ function manualInject() {
     log.scrollTop = log.scrollHeight;
   }
 
-  addLog('Click into the Perplexity input box now...');
-  addLog('Scanning in 2 seconds...');
-  btn.textContent = 'Waiting 2s...';
-  btn.disabled = true;
-
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (!tabs || !tabs[0]) {
-      addLog('ERROR: No active tab found');
-      btn.textContent = 'Inject Briefing (2s delay)';
+  // Check if we have stored results from a previous scan
+  // (since the popup closes when you switch tabs)
+  chrome.storage.local.get(['nb_diag_log', 'nb_diag_running'], (stored) => {
+    if (stored.nb_diag_running) {
+      addLog('*** Scan is still running in the background ***');
+      addLog('Switch to Perplexity, open/use the chat, then come back here.');
+      addLog('Click "Read Results" when ready.');
+      btn.textContent = 'Read Results';
+      btn.onclick = readDiagResults;
+      return;
+    }
+    if (stored.nb_diag_log && stored.nb_diag_log.length > 0) {
+      addLog('*** Previous scan results found ***');
+      stored.nb_diag_log.forEach(line => addLog(line));
+      addLog('');
+      addLog('Click the button again to start a new scan.');
+      // Clear old results
+      chrome.storage.local.remove(['nb_diag_log']);
+      btn.textContent = 'Start New Scan';
       btn.disabled = false;
       return;
     }
+
+    // --- START A NEW SCAN ---
+    startDiagScan(btn, addLog);
+  });
+}
+
+function readDiagResults() {
+  const log = document.getElementById('injectLog');
+  const btn = document.getElementById('injectBtn');
+  log.style.display = 'block';
+  log.textContent = '';
+
+  function addLog(msg) {
+    log.textContent += msg + '\n';
+    log.scrollTop = log.scrollHeight;
+  }
+
+  chrome.storage.local.get(['nb_diag_log', 'nb_diag_running'], (stored) => {
+    if (stored.nb_diag_running) {
+      addLog('Scan is still running... switch to Perplexity and wait, then come back.');
+      return;
+    }
+    if (stored.nb_diag_log && stored.nb_diag_log.length > 0) {
+      addLog('=== DIAGNOSTIC RESULTS ===');
+      stored.nb_diag_log.forEach(line => addLog(line));
+      chrome.storage.local.remove(['nb_diag_log', 'nb_diag_running']);
+    } else {
+      addLog('No results yet. Make sure you opened a Perplexity chat while the scan was running.');
+    }
+    btn.textContent = 'Diagnose Input (30s scan)';
+    btn.onclick = manualInject;
+    btn.disabled = false;
+  });
+}
+
+function startDiagScan(btn, addLog) {
+  addLog('Starting 30-second background scan...');
+  addLog('1. This will inject a scanner into the active Perplexity tab');
+  addLog('2. Switch to Perplexity and open/click into a chat');
+  addLog('3. The scanner runs every 500ms for 30 seconds');
+  addLog('4. Come back here and click "Read Results"');
+  addLog('');
+
+  btn.textContent = 'Read Results';
+  btn.onclick = readDiagResults;
+
+  // Clear old results and mark as running
+  chrome.storage.local.set({ nb_diag_log: [], nb_diag_running: true });
+
+  // Find the Perplexity tab
+  chrome.tabs.query({ url: 'https://www.perplexity.ai/*' }, (tabs) => {
+    if (!tabs || tabs.length === 0) {
+      addLog('ERROR: No Perplexity tab found. Open perplexity.ai first.');
+      chrome.storage.local.set({ nb_diag_running: false });
+      btn.textContent = 'Diagnose Input (30s scan)';
+      btn.onclick = manualInject;
+      return;
+    }
+
     const tabId = tabs[0].id;
-    addLog('Tab: ' + tabs[0].url);
+    addLog('Found Perplexity tab: ' + tabs[0].url);
+    addLog('Injecting scanner... switch to that tab now!');
 
-    setTimeout(() => {
-      addLog('--- SCANNING ---');
+    // Inject the persistent scanner into MAIN world
+    chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: () => {
+        // This runs ON the Perplexity page in MAIN world
+        // It scans every 500ms for 30s and stores snapshots
+        const scanLog = [];
+        let scanCount = 0;
+        const MAX_SCANS = 60; // 30 seconds at 500ms intervals
+        let lastSnapshot = '';
 
-      // Pure diagnostic: dump activeElement + all editables
-      chrome.scripting.executeScript({
-        target: { tabId },
-        world: 'MAIN',
-        func: () => {
+        function snapshot() {
           const r = [];
+          const ts = new Date().toISOString().substring(11, 23);
+          r.push(`--- scan #${scanCount} @ ${ts} ---`);
 
-          // What is focused right now?
+          // Focused element
           const f = document.activeElement;
-          r.push('=== FOCUSED ELEMENT ===');
           if (f) {
-            r.push('tag: ' + f.tagName);
-            r.push('id: ' + (f.id || '(none)'));
-            r.push('class: ' + (f.className || '(none)'));
-            r.push('role: ' + (f.getAttribute('role') || '(none)'));
-            r.push('contentEditable: ' + f.contentEditable);
-            r.push('tabIndex: ' + f.tabIndex);
-            // dump ALL attributes
-            const attrs = [...f.attributes].map(a => a.name + '="' + a.value + '"');
-            r.push('attributes: ' + attrs.join(' '));
-            // parent chain (3 levels)
+            r.push('focused: ' + f.tagName +
+              ' id=' + (f.id || '-') +
+              ' role=' + (f.getAttribute('role') || '-') +
+              ' ce=' + f.contentEditable +
+              ' class=' + (f.className || '').substring(0, 80));
+            if (f.attributes) {
+              const attrs = [...f.attributes].map(a => a.name + '="' + a.value + '"');
+              r.push('  attrs: ' + attrs.join(' '));
+            }
+            // parent chain
             let p = f.parentElement;
-            for (let i = 0; i < 3 && p; i++) {
-              r.push('parent[' + i + ']: ' + p.tagName + ' class=' + (p.className || '').substring(0, 80) + ' role=' + (p.getAttribute('role') || 'none'));
+            for (let i = 0; i < 4 && p; i++) {
+              r.push('  parent[' + i + ']: ' + p.tagName +
+                ' class=' + (p.className || '').substring(0, 60) +
+                ' role=' + (p.getAttribute('role') || '-') +
+                ' id=' + (p.id || '-'));
               p = p.parentElement;
             }
-            // outerHTML snippet
-            r.push('outerHTML (first 300): ' + f.outerHTML.substring(0, 300));
+            r.push('  outerHTML[0:500]: ' + f.outerHTML.substring(0, 500));
           } else {
-            r.push('(nothing focused)');
+            r.push('focused: (none)');
           }
 
-          // Also scan for all contenteditable and textbox elements
-          r.push('');
-          r.push('=== ALL EDITABLE ELEMENTS ===');
-          const editables = document.querySelectorAll('[contenteditable="true"], [role="textbox"], textarea');
+          // All editable elements
+          const editables = document.querySelectorAll(
+            '[contenteditable="true"], [contenteditable="plaintext-only"], ' +
+            '[role="textbox"], textarea, input[type="text"]'
+          );
+          r.push('editables found: ' + editables.length);
           editables.forEach((el, i) => {
             const attrs = [...el.attributes].map(a => a.name + '="' + a.value + '"');
-            r.push('#' + i + ': ' + el.tagName + ' | ' + attrs.join(' ') + ' | class=' + (el.className || '').substring(0, 60));
+            const text = (el.textContent || el.value || '').substring(0, 50);
+            r.push('  [' + i + '] ' + el.tagName + ' | ' + attrs.join(' '));
+            r.push('       text: "' + text + '"');
+            r.push('       visible: ' + (el.offsetParent !== null) +
+              ' size: ' + el.offsetWidth + 'x' + el.offsetHeight);
           });
 
-          if (editables.length === 0) {
-            r.push('(none found)');
+          // Also check for Perplexity-specific patterns
+          const prosemirror = document.querySelectorAll('.ProseMirror, .tiptap, [data-lexical-editor], .ql-editor');
+          if (prosemirror.length > 0) {
+            r.push('editor frameworks detected: ' + prosemirror.length);
+            prosemirror.forEach((el, i) => {
+              const attrs = [...el.attributes].map(a => a.name + '="' + a.value + '"');
+              r.push('  editor[' + i + '] ' + el.tagName + ' | ' + attrs.join(' '));
+            });
           }
 
-          console.log('[NB-DIAG]\n' + r.join('\n'));
+          // Check for any submit-like buttons
+          const submits = document.querySelectorAll(
+            'button[aria-label*="Submit"], button[aria-label*="Send"], ' +
+            'button[aria-label*="submit"], button[aria-label*="send"], ' +
+            'button[type="submit"]'
+          );
+          r.push('submit buttons: ' + submits.length);
+          submits.forEach((el, i) => {
+            r.push('  btn[' + i + ']: ' + (el.ariaLabel || el.textContent || '').substring(0, 40) +
+              ' disabled=' + el.disabled);
+          });
+
           return r;
-        },
-        args: []
-      }).then((results) => {
-        if (results && results[0] && results[0].result) {
-          results[0].result.forEach(line => addLog(line));
-        } else {
-          addLog('Script ran but returned no results. Check page console for [NB-DIAG].');
         }
-        btn.textContent = 'Inject Briefing (2s delay)';
-        btn.disabled = false;
-      }).catch(err => {
-        addLog('ERROR: ' + err.message);
-        btn.textContent = 'Inject Briefing (2s delay)';
-        btn.disabled = false;
-      });
-    }, 2000);
+
+        const interval = setInterval(() => {
+          scanCount++;
+          try {
+            const lines = snapshot();
+            const snap = lines.join('|');
+
+            // Only log if something changed (to avoid 60 identical entries)
+            if (snap !== lastSnapshot) {
+              lastSnapshot = snap;
+              lines.forEach(l => scanLog.push(l));
+              scanLog.push('');
+            }
+          } catch (e) {
+            scanLog.push('scan error: ' + e.message);
+          }
+
+          if (scanCount >= MAX_SCANS) {
+            clearInterval(interval);
+            scanLog.push('=== SCAN COMPLETE (' + scanCount + ' snapshots) ===');
+
+            // Save results to extension storage
+            // We have to use window.postMessage to get data back to the extension
+            // since we're in MAIN world
+            window.postMessage({
+              type: 'NB_DIAG_COMPLETE',
+              log: scanLog
+            }, '*');
+
+            console.log('[NB-DIAG] Scan complete. Results:', scanLog.join('\n'));
+          }
+        }, 500);
+
+        console.log('[NB-DIAG] Persistent scanner started. ' + MAX_SCANS + ' scans over 30 seconds.');
+      },
+      args: []
+    }).catch(err => {
+      addLog('ERROR injecting scanner: ' + err.message);
+      chrome.storage.local.set({ nb_diag_running: false });
+    });
   });
 }
