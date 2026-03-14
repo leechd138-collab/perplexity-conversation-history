@@ -451,12 +451,15 @@ async function injectBriefingIntoTab(tabId) {
               btn.click();
               clearInterval(submitInterval);
             } else if (++submitAttempts >= 30) {
-              console.log('[NB-MAIN] Submit button never appeared. Trying Enter key.');
+              console.log('[NB-MAIN] Submit button never appeared. Trying Enter key sequence.');
               input.focus();
-              input.dispatchEvent(new KeyboardEvent('keydown', {
+              const enterOpts = {
                 key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
                 bubbles: true, cancelable: true
-              }));
+              };
+              input.dispatchEvent(new KeyboardEvent('keydown', enterOpts));
+              input.dispatchEvent(new KeyboardEvent('keypress', enterOpts));
+              input.dispatchEvent(new KeyboardEvent('keyup', enterOpts));
               clearInterval(submitInterval);
             }
           }, 250);
