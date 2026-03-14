@@ -7,6 +7,7 @@ document.getElementById('checkBtn').addEventListener('click', checkService);
 document.getElementById('approveBtn').addEventListener('click', toggleApproval);
 document.getElementById('briefingBtn').addEventListener('click', toggleBriefing);
 document.getElementById('clearMemosBtn').addEventListener('click', clearMemos);
+document.getElementById('injectBtn').addEventListener('click', manualInject);
 
 let currentlyApproved = false;
 
@@ -162,4 +163,148 @@ function esc(str) {
   const d = document.createElement('div');
   d.textContent = str;
   return d.innerHTML;
+}
+
+function manualInject() {
+  const btn = document.getElementById('injectBtn');
+  const log = document.getElementById('injectLog');
+  log.style.display = 'block';
+  log.textContent = '';
+
+  function addLog(msg) {
+    log.textContent += msg + '\n';
+    log.scrollTop = log.scrollHeight;
+  }
+
+  // Step 1: Get the briefing text from background
+  chrome.runtime.sendMessage({ action: 'nb_get_briefing' }, (response) => {
+    if (!response || !response.ok) {
+      addLog('ERROR: Could not get briefing from background');
+      return;
+    }
+    const briefing = response.briefing;
+    addLog('Got briefing: ' + briefing.length + ' chars');
+    addLog('You have 2 seconds \u2014 click into the Perplexity input box...');
+    btn.textContent = 'Click input box now! 2s...';
+    btn.disabled = true;
+
+    // Step 2: Get active tab, then inject after 2s
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (!tabs || !tabs[0]) {
+        addLog('ERROR: No active tab found');
+        return;
+      }
+      const tabId = tabs[0].id;
+      addLog('Target tab: ' + tabs[0].url);
+
+      setTimeout(() => {
+        addLog('Timer fired \u2014 injecting into tab ' + tabId + '...');
+
+        chrome.scripting.executeScript({
+          target: { tabId },
+          world: 'MAIN',
+          func: (text) => {
+            const results = [];
+            results.push('=== NB DIAGNOSTIC ===' );
+
+            // Log what's focused
+            const focused = document.activeElement;
+            results.push('Active element: ' + (focused ? focused.tagName + ' | contentEditable=' + focused.contentEditable + ' | role=' + (focused.getAttribute('role') || 'none') + ' | class=' + (focused.className || '').substring(0, 100) : 'null'));
+
+            // Try every possible selector
+            const selectors = [
+              'div[contenteditable="true"][role="textbox"]',
+              '[role="textbox"][contenteditable="true"]',
+              'div[contenteditable="true"]',
+              'textarea',
+              '[contenteditable="true"]',
+              '[role="textbox"]',
+              '.ProseMirror',
+              '[data-lexical-editor]',
+              '[data-slate-editor]',
+              '[data-editor]',
+              'div[contenteditable="plaintext-only"]'
+            ];
+
+            selectors.forEach(sel => {
+              const el = document.querySelector(sel);
+              if (el) {
+                results.push('FOUND: ' + sel + ' -> ' + el.tagName + ' id=' + (el.id || 'none') + ' class=' + (el.className || '').substring(0, 80));
+              }
+            });
+
+            // Pick target: focused element if editable, otherwise first match
+            let target = null;
+            if (focused && (focused.contentEditable === 'true' || focused.tagName === 'TEXTAREA')) {
+              target = focused;
+              results.push('Using focused element as target');
+            } else {
+              for (const sel of selectors) {
+                const el = document.querySelector(sel);
+                if (el) { target = el; results.push('Using selector fallback: ' + sel); break; }
+              }
+            }
+
+            if (!target) {
+              results.push('NO TARGET FOUND - cannot inject');
+              console.log(results.join('\n'));
+              return results;
+            }
+
+            target.focus();
+            results.push('Target focused: ' + target.tagName + ' role=' + (target.getAttribute('role') || 'none'));
+
+            // Try execCommand
+            document.execCommand('selectAll', false, null);
+            document.execCommand('insertText', false, text);
+            const contentAfter = target.textContent.trim();
+            results.push('After execCommand: content length=' + contentAfter.length);
+
+            if (contentAfter.length > 0) {
+              results.push('TEXT INJECTION SUCCEEDED via execCommand');
+              // Try submit after short delay
+              setTimeout(() => {
+                const submitBtn = document.querySelector('button[aria-label="Submit"]')
+                         || document.querySelector('button[aria-label="Send"]');
+                if (submitBtn) {
+                  results.push('Submit button found, clicking');
+                  submitBtn.click();
+                } else {
+                  results.push('No submit button found - trying Enter key sequence');
+                  const opts = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
+                  target.dispatchEvent(new KeyboardEvent('keydown', opts));
+                  target.dispatchEvent(new KeyboardEvent('keypress', opts));
+                  target.dispatchEvent(new KeyboardEvent('keyup', opts));
+                }
+                console.log('[NB-DIAG] ' + results.join('\n[NB-DIAG] '));
+              }, 500);
+            } else {
+              results.push('execCommand did NOT inject text');
+              results.push('Trying direct textContent mutation...');
+              target.textContent = text;
+              target.dispatchEvent(new Event('input', { bubbles: true }));
+              target.dispatchEvent(new Event('change', { bubbles: true }));
+              results.push('After direct set: content length=' + target.textContent.trim().length);
+              console.log('[NB-DIAG] ' + results.join('\n[NB-DIAG] '));
+            }
+
+            return results;
+          },
+          args: [briefing]
+        }).then((injectionResults) => {
+          if (injectionResults && injectionResults[0] && injectionResults[0].result) {
+            injectionResults[0].result.forEach(line => addLog(line));
+          } else {
+            addLog('Script executed (check page console for [NB-DIAG] logs)');
+          }
+          btn.textContent = 'Inject Briefing (2s delay)';
+          btn.disabled = false;
+        }).catch(err => {
+          addLog('ERROR: ' + err.message);
+          btn.textContent = 'Inject Briefing (2s delay)';
+          btn.disabled = false;
+        });
+      }, 2000);
+    });
+  });
 }
