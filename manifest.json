@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "NaughtyBits",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Autonomous AI companion — persistent memory, process management, and session continuity",
   "permissions": [
     "storage",
@@ -10,14 +10,14 @@
     "nativeMessaging"
   ],
   "host_permissions": [
-    "https://www.perplexity.ai/*"
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
-      "matches": ["https://www.perplexity.ai/*"],
+      "matches": ["<all_urls>"],
       "js": ["content.js"],
       "run_at": "document_idle",
       "all_frames": true
