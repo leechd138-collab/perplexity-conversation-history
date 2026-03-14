@@ -21,6 +21,7 @@ let serviceConnected = false;
 let nativePort = null;  // chrome.runtime.Port to the native host
 let pendingCallbacks = new Map();  // id -> callback for async native responses
 let nextCallbackId = 1;
+let stateLoaded = false;  // gate: don't inject until storage is loaded
 
 // ============================================================
 // STORAGE
@@ -35,6 +36,7 @@ async function loadState() {
   nextMemoId = result.nb_nextMemoId || (memos.length > 0 ? Math.max(...memos.map(m => m.id)) + 1 : 1);
   nextProcessId = result.nb_nextProcessId || (processes.length > 0 ? Math.max(...processes.map(p => p.id)) + 1 : 1);
   serviceApproved = result.nb_service_approved || false;
+  stateLoaded = true;
   console.log(`[NB] Loaded: ${memos.length} memos, ${processes.length} procs, approved=${serviceApproved}`);
 }
 
@@ -235,7 +237,7 @@ function buildBriefing() {
 
   L.push('=== NAUGHTYBITS v2.0 SYSTEM BRIEFING ===');
   L.push('');
-  L.push('You have NaughtyBits installed — a persistent memory and process management companion extension.');
+  L.push('You have NaughtyBits installed \u2014 a persistent memory and process management companion extension.');
   L.push('It watches your output text in real time. When you write a /naughtybits command in your response,');
   L.push('the extension intercepts it and executes it immediately.');
   L.push('');
@@ -247,23 +249,23 @@ function buildBriefing() {
   L.push('Write them on their own line in your response. The extension parses them from your output.');
   L.push('');
   L.push('MEMO COMMANDS:');
-  L.push('  /naughtybits addmemo <text>                — Save a memo for future sessions');
-  L.push('  /naughtybits addmemo [tag1,tag2] <text>    — Save a memo with tags');
-  L.push('  /naughtybits delmemo <id>                   — Delete a memo by its numeric ID');
-  L.push('  /naughtybits listmemos                      — Dump all memos');
-  L.push('  /naughtybits searchmemos <query>            — Search memos by text or tag');
+  L.push('  /naughtybits addmemo <text>                \u2014 Save a memo for future sessions');
+  L.push('  /naughtybits addmemo [tag1,tag2] <text>    \u2014 Save a memo with tags');
+  L.push('  /naughtybits delmemo <id>                   \u2014 Delete a memo by its numeric ID');
+  L.push('  /naughtybits listmemos                      \u2014 Dump all memos');
+  L.push('  /naughtybits searchmemos <query>            \u2014 Search memos by text or tag');
   L.push('');
   L.push('PROCESS COMMANDS (requires NaughtyBits host service):');
-  L.push('  /naughtybits exec <command>                 — Execute a command and return output');
-  L.push('  /naughtybits spawn <command>                — Spawn a long-running process');
-  L.push('  /naughtybits kill <id>                      — Kill a tracked process');
-  L.push('  /naughtybits ps                             — List all tracked processes');
+  L.push('  /naughtybits exec <command>                 \u2014 Execute a command and return output');
+  L.push('  /naughtybits spawn <command>                \u2014 Spawn a long-running process');
+  L.push('  /naughtybits kill <id>                      \u2014 Kill a tracked process');
+  L.push('  /naughtybits ps                             \u2014 List all tracked processes');
   L.push('');
 
   // ---- SERVICE STATUS ----
   L.push('## HOST SERVICE STATUS');
-  L.push(`  Connected: ${serviceConnected ? 'YES' : 'NO — the NaughtyBits host service is not running or not installed'}`);
-  L.push(`  Approved:  ${serviceApproved ? 'YES' : 'NO — user must approve in the NaughtyBits popup'}`);
+  L.push(`  Connected: ${serviceConnected ? 'YES' : 'NO \u2014 the NaughtyBits host service is not running or not installed'}`);
+  L.push(`  Approved:  ${serviceApproved ? 'YES' : 'NO \u2014 user must approve in the NaughtyBits popup'}`);
   L.push('  NOTE: exec/spawn/kill require both: host connected + approved.');
   L.push('  Memo commands work regardless of host status (stored in extension).');
   L.push('');
@@ -272,7 +274,7 @@ function buildBriefing() {
   L.push('## OPERATING RULES');
   L.push('');
   L.push('1. ALWAYS save memos about what you are working on. Every action, decision, bug, design choice.');
-  L.push('2. Treat memos as your personal work journal — the next instance reads these to get up to speed.');
+  L.push('2. Treat memos as your personal work journal \u2014 the next instance reads these to get up to speed.');
   L.push('3. Be SPECIFIC: file names, function names, error messages, architectural decisions, next steps.');
   L.push('4. When you finish a task or hit a stopping point, write a summary memo.');
   L.push('5. On session start, READ the memos below and pick up where the last instance left off.');
@@ -305,7 +307,7 @@ function buildBriefing() {
     L.push(`## RUNNING PROCESSES (${running.length})`);
     L.push('');
     running.forEach(p => {
-      L.push(`  #${p.id} [PID: ${p.pid || '?'}] ${p.command} — since ${new Date(p.started).toLocaleString()}`);
+      L.push(`  #${p.id} [PID: ${p.pid || '?'}] ${p.command} \u2014 since ${new Date(p.started).toLocaleString()}`);
     });
     L.push('');
   }
@@ -330,6 +332,17 @@ function buildBriefing() {
 // MAIN WORLD INJECTION
 // ============================================================
 async function injectBriefingIntoTab(tabId) {
+  // Wait for state to be loaded from storage before building the briefing
+  if (!stateLoaded) {
+    console.log('[NB] State not loaded yet, waiting...');
+    await new Promise(resolve => {
+      const check = setInterval(() => {
+        if (stateLoaded) { clearInterval(check); resolve(); }
+      }, 100);
+      setTimeout(() => { clearInterval(check); resolve(); }, 5000); // max 5s wait
+    });
+  }
+
   const briefing = buildBriefing();
   console.log(`[NB] Injecting briefing into tab ${tabId} (${briefing.length} chars)`);
 
@@ -340,37 +353,129 @@ async function injectBriefingIntoTab(tabId) {
       func: (text) => {
         console.log('[NB-MAIN] Injector running, text length:', text.length);
 
-        function tryInject() {
+        async function tryInject() {
           const input = document.querySelector('div[contenteditable="true"][role="textbox"]')
+                     || document.querySelector('[role="textbox"][contenteditable="true"]')
                      || document.querySelector('div[contenteditable="true"]');
-          if (!input) return false;
+          if (!input) {
+            console.log('[NB-MAIN] No input element found');
+            return false;
+          }
+
+          // Guard: if user is already typing, don't clobber their input
+          const existing = input.textContent.trim();
+          if (existing.length > 0) {
+            console.log('[NB-MAIN] Input not empty, user may be typing. Skipping injection.');
+            return true; // return true to stop retrying
+          }
 
           input.focus();
-          document.execCommand('selectAll', false, null);
-          document.execCommand('insertText', false, text);
 
-          setTimeout(() => {
+          // === TEXT INJECTION ===
+          // We try multiple strategies because modern editors (Lexical, ProseMirror,
+          // Draft.js) each handle programmatic input differently.
+
+          let injected = false;
+
+          // Strategy 1: execCommand('insertText') \u2014 this actually works in MAIN world
+          // because the editor hooks document.execCommand. The old code ran this from
+          // MAIN world too but had other issues (race conditions, submit timing).
+          try {
+            document.execCommand('selectAll', false, null);
+            document.execCommand('insertText', false, text);
+            if (input.textContent.trim().length > 0) {
+              injected = true;
+              console.log('[NB-MAIN] execCommand insertText succeeded');
+            }
+          } catch (e) {
+            console.log('[NB-MAIN] execCommand failed:', e);
+          }
+
+          // Strategy 2: Synthetic paste via ClipboardEvent with DataTransfer
+          if (!injected) {
+            try {
+              const dt = new DataTransfer();
+              dt.setData('text/plain', text);
+              input.dispatchEvent(new ClipboardEvent('paste', {
+                bubbles: true, cancelable: true, clipboardData: dt
+              }));
+              // Give the editor a tick to process
+              await new Promise(r => setTimeout(r, 100));
+              if (input.textContent.trim().length > 0) {
+                injected = true;
+                console.log('[NB-MAIN] ClipboardEvent paste succeeded');
+              }
+            } catch (e) {
+              console.log('[NB-MAIN] ClipboardEvent paste failed:', e);
+            }
+          }
+
+          // Strategy 3: Clipboard API write + execCommand paste
+          if (!injected) {
+            try {
+              await navigator.clipboard.writeText(text);
+              document.execCommand('paste');
+              await new Promise(r => setTimeout(r, 100));
+              if (input.textContent.trim().length > 0) {
+                injected = true;
+                console.log('[NB-MAIN] Clipboard API + execCommand paste succeeded');
+              }
+            } catch (e) {
+              console.log('[NB-MAIN] Clipboard API approach failed:', e);
+            }
+          }
+
+          // Strategy 4: Direct DOM mutation + input event dispatch
+          if (!injected) {
+            try {
+              input.textContent = text;
+              input.dispatchEvent(new Event('input', { bubbles: true }));
+              input.dispatchEvent(new Event('change', { bubbles: true }));
+              console.log('[NB-MAIN] Direct textContent + input event dispatch');
+              injected = true;
+            } catch (e) {
+              console.log('[NB-MAIN] Direct mutation failed:', e);
+            }
+          }
+
+          console.log('[NB-MAIN] Injection result:', injected, 'content length:', input.textContent.trim().length);
+
+          // === SUBMIT ===
+          // Poll for the submit button (renders conditionally when editor has content)
+          let submitAttempts = 0;
+          const submitInterval = setInterval(() => {
             const btn = document.querySelector('button[aria-label="Submit"]')
-                     || document.querySelector('button[aria-label="Send"]')
-                     || document.querySelector('button[type="submit"]');
+                     || document.querySelector('button[aria-label="Send"]');
             if (btn && !btn.disabled) {
+              console.log('[NB-MAIN] Submit button found, clicking');
               btn.click();
-            } else {
+              clearInterval(submitInterval);
+            } else if (++submitAttempts >= 30) {
+              console.log('[NB-MAIN] Submit button never appeared. Trying Enter key.');
+              input.focus();
               input.dispatchEvent(new KeyboardEvent('keydown', {
                 key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
                 bubbles: true, cancelable: true
               }));
+              clearInterval(submitInterval);
             }
-          }, 500);
+          }, 250);
+
           return true;
         }
 
-        if (!tryInject()) {
+        // Retry finding the input element up to 15 times (15 seconds)
+        async function runWithRetry() {
+          if (await tryInject()) return;
           let attempts = 0;
-          const retry = setInterval(() => {
-            if (tryInject() || ++attempts >= 10) clearInterval(retry);
+          const retry = setInterval(async () => {
+            if ((await tryInject()) || ++attempts >= 15) {
+              if (attempts >= 15) console.log('[NB-MAIN] Gave up after 15 attempts');
+              clearInterval(retry);
+            }
           }, 1000);
         }
+        runWithRetry();
       },
       args: [briefing]
     });
@@ -406,7 +511,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       break;
     }
 
-    // --- Process ops (async — routes through native host) ---
+    // --- Process ops (async \u2014 routes through native host) ---
     case 'nb_exec': {
       execCommand(request.command).then(r => sendResponse(r));
       return true;
@@ -455,7 +560,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       break;
     }
     case 'nb_service_check': {
-      // Active health check — tries to connect and ping
+      // Active health check \u2014 tries to connect and ping
       checkHostHealth().then(connected => {
         sendResponse({ ok: true, connected, approved: serviceApproved });
       });
