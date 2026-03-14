@@ -7,7 +7,7 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       width: 420px;
-      max-height: 600px;
+      min-height: 200px;
       font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
       background: #0d1117;
       color: #c9d1d9;
@@ -150,6 +150,12 @@
     <div class="svc-hint" id="serviceHint"></div>
   </div>
 
+  <!-- DIAGNOSTIC INJECT - at top so it's always visible -->
+  <div class="actions">
+    <button id="injectBtn" style="background:#0d4429;color:#3fb950;border-color:#238636;font-weight:600;">Diagnose Input (2s delay)</button>
+  </div>
+  <pre id="injectLog" style="background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:8px;font-family:'Cascadia Code','Fira Code',monospace;font-size:10px;color:#3fb950;max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;display:none;margin:0 16px 10px;"></pre>
+
   <!-- Memos -->
   <div class="section">
     <div class="section-title">
@@ -171,11 +177,6 @@
     <button id="briefingBtn">View Briefing</button>
     <button id="clearMemosBtn" class="danger">Clear Memos</button>
   </div>
-
-  <div class="actions">
-    <button id="injectBtn" style="background:#0d4429;color:#3fb950;border-color:#238636;font-weight:600;">Inject Briefing (2s delay)</button>
-  </div>
-  <pre id="injectLog" style="background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:8px;font-family:'Cascadia Code','Fira Code',monospace;font-size:10px;color:#3fb950;max-height:200px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;display:none;margin:0 16px 10px;"></pre>
 
   <pre id="briefingPreview"></pre>
 
