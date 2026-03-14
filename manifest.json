@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "Perplexity Conversation History",
-  "version": "1.0.0",
-  "description": "Save and restore Perplexity conversation history",
+  "name": "NaughtyBits",
+  "version": "2.0.0",
+  "description": "Autonomous AI companion — persistent memory, process management, and session continuity",
   "permissions": [
     "storage",
     "activeTab",
-    "scripting"
+    "scripting",
+    "nativeMessaging"
   ],
   "host_permissions": [
     "https://www.perplexity.ai/*"
@@ -17,22 +18,13 @@
   "content_scripts": [
     {
       "matches": ["https://www.perplexity.ai/*"],
-      "js": ["content.js, "memory.js", "auto-inject.js""]
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Conversation History"
-  },
-  "icons": {
-    "16": "images/icon-16.png",
-    "48": "images/icon-48.png",
-    "128": "images/icon-128.png"
-  },
-  "web_accessible_resources": [
-    {
-      "resources": ["memory.js"],
-      "matches": ["https://www.perplexity.ai/*"]
-    }
+    "default_title": "NaughtyBits Dashboard"
   }
 }
