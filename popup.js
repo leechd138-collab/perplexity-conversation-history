@@ -1,6 +1,9 @@
-// NaughtyBits Popup v2.0.0 — Developer Dashboard
+// NaughtyBits Popup v3.0.0 — Developer Dashboard + CDP Warning
 
-document.addEventListener('DOMContentLoaded', loadState);
+document.addEventListener('DOMContentLoaded', () => {
+  loadState();
+  checkCdpStatus();
+});
 
 document.getElementById('refreshBtn').addEventListener('click', loadState);
 document.getElementById('checkBtn').addEventListener('click', checkService);
@@ -8,8 +11,42 @@ document.getElementById('approveBtn').addEventListener('click', toggleApproval);
 document.getElementById('briefingBtn').addEventListener('click', toggleBriefing);
 document.getElementById('clearMemosBtn').addEventListener('click', clearMemos);
 document.getElementById('injectBtn').addEventListener('click', manualInject);
+document.getElementById('cdpRecheckBtn').addEventListener('click', () => {
+  const btn = document.getElementById('cdpRecheckBtn');
+  btn.textContent = 'Checking...';
+  btn.disabled = true;
+  checkCdpStatus().then(() => {
+    btn.textContent = 'Re-check CDP';
+    btn.disabled = false;
+  });
+});
 
 let currentlyApproved = false;
+
+// ============================================================
+// CDP STATUS CHECK
+// Asks background.js to probe localhost:9222. If not reachable,
+// shows a BIG warning banner telling the user to restart the browser.
+// ============================================================
+function checkCdpStatus() {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ action: 'nb_cdp_status' }, (response) => {
+      const warning = document.getElementById('cdpWarning');
+      const ok = document.getElementById('cdpOk');
+
+      if (response && response.ok && response.cdpAvailable) {
+        // CDP is available — show green banner
+        warning.classList.add('hidden');
+        ok.classList.remove('hidden');
+      } else {
+        // CDP NOT available — show big red warning
+        warning.classList.remove('hidden');
+        ok.classList.add('hidden');
+      }
+      resolve();
+    });
+  });
+}
 
 function loadState() {
   chrome.runtime.sendMessage({ action: 'nb_get_state' }, (response) => {
@@ -18,6 +55,17 @@ function loadState() {
     renderProcesses(response.processes, response.running);
     currentlyApproved = response.serviceApproved;
     updateServiceUI(response.serviceConnected, response.serviceApproved);
+
+    // Also update CDP status from state
+    const warning = document.getElementById('cdpWarning');
+    const ok = document.getElementById('cdpOk');
+    if (response.cdpAvailable) {
+      warning.classList.add('hidden');
+      ok.classList.remove('hidden');
+    } else {
+      warning.classList.remove('hidden');
+      ok.classList.add('hidden');
+    }
   });
 }
 

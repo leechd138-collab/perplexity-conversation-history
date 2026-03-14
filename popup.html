@@ -14,6 +14,93 @@
       font-size: 13px;
       overflow-y: auto;
     }
+
+    /* ============================================================
+       CDP WARNING BANNER — BIG ASS WARNING
+       ============================================================ */
+    .cdp-warning {
+      background: linear-gradient(135deg, #6e1a1a, #4a0e0e);
+      border: 3px solid #f85149;
+      border-radius: 0;
+      padding: 16px 20px;
+      text-align: center;
+      animation: warningPulse 2s ease-in-out infinite;
+    }
+    .cdp-warning.hidden { display: none; }
+    @keyframes warningPulse {
+      0%, 100% { border-color: #f85149; }
+      50% { border-color: #ff7b72; }
+    }
+    .cdp-warning-icon {
+      font-size: 36px;
+      display: block;
+      margin-bottom: 8px;
+    }
+    .cdp-warning-title {
+      font-size: 18px;
+      font-weight: 800;
+      color: #ff7b72;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+    }
+    .cdp-warning-text {
+      font-size: 12px;
+      color: #ffa198;
+      line-height: 1.5;
+      margin-bottom: 10px;
+    }
+    .cdp-warning-code {
+      display: block;
+      background: #0d1117;
+      border: 1px solid #f85149;
+      border-radius: 4px;
+      padding: 8px 12px;
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 11px;
+      color: #ffa198;
+      word-break: break-all;
+      margin: 8px 0;
+      text-align: left;
+    }
+    .cdp-warning-hint {
+      font-size: 10px;
+      color: #f0883e;
+      margin-top: 6px;
+      line-height: 1.4;
+    }
+    .cdp-warning-recheck {
+      margin-top: 10px;
+      padding: 6px 16px;
+      border-radius: 4px;
+      border: 1px solid #f85149;
+      background: #21262d;
+      color: #ff7b72;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .cdp-warning-recheck:hover { background: #4a1e1e; }
+
+    /* CDP OK banner */
+    .cdp-ok {
+      background: #0d2818;
+      border-bottom: 2px solid #238636;
+      padding: 8px 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #3fb950;
+    }
+    .cdp-ok.hidden { display: none; }
+    .cdp-ok-dot {
+      width: 10px; height: 10px;
+      background: #3fb950;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
     .header {
       background: linear-gradient(135deg, #161b22, #1c2333);
       padding: 14px 16px;
@@ -130,9 +217,38 @@
   </style>
 </head>
 <body>
+
+  <!-- ============================================================
+       CDP WARNING BANNER — Shows when browser was NOT started
+       with --remote-debugging-port=9222
+       ============================================================ -->
+  <div class="cdp-warning hidden" id="cdpWarning">
+    <span class="cdp-warning-icon">&#9888;</span>
+    <div class="cdp-warning-title">CDP Not Detected</div>
+    <div class="cdp-warning-text">
+      Your browser was <strong>NOT</strong> started with the required
+      remote debugging flag. CDP injection will not work.<br>
+      Close ALL browser windows and restart using:
+    </div>
+    <code class="cdp-warning-code">your-browser.exe --remote-debugging-port=9222</code>
+    <div class="cdp-warning-hint">
+      Premade .bat shortcuts for Chrome, Edge, and Comet are included in the
+      <strong>browser-start-shortcuts</strong> folder inside this extension's directory.<br><br>
+      &#9888; If your browser is installed on a different drive or path, edit the .bat file first.<br>
+      ALL existing browser windows must be closed before launching — the flag only works on the first instance.
+    </div>
+    <button class="cdp-warning-recheck" id="cdpRecheckBtn">Re-check CDP</button>
+  </div>
+
+  <!-- CDP OK banner (shown when CDP is detected) -->
+  <div class="cdp-ok hidden" id="cdpOk">
+    <span class="cdp-ok-dot"></span>
+    <span>CDP active on port 9222</span>
+  </div>
+
   <div class="header">
     <h1>NaughtyBits</h1>
-    <span class="version">v2.0.0</span>
+    <span class="version">v3.0.0</span>
   </div>
 
   <!-- Service Status -->

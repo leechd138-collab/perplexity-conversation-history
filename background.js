@@ -1,11 +1,19 @@
-// NaughtyBits Background Service Worker v2.1.0
+// NaughtyBits Background Service Worker v3.0.0
 // Central hub: memo storage, process registry, MAIN world injection,
-// Native Messaging bridge to the local host process, and wminject routing.
+// Native Messaging bridge to the local host process, and CDP injection routing.
 //
 // ARCHITECTURE:
 // Extension <-> background.js <-> Native Messaging <-> naughtybits_host.exe
 //                                                        (runs as logged-in user)
+//                                                        |
+//                                                        v
+//                                                   CDP (localhost:9222)
+//                                                        |
+//                                                        v
+//                                                   Chrome tab (Runtime.evaluate)
+//
 // No ports. No HTTP. No tokens. OS-level auth via Chrome Native Messaging.
+// Chrome must be launched with: --remote-debugging-port=9222
 
 const NATIVE_HOST_NAME = 'com.naughtybits.host';
 
@@ -22,6 +30,7 @@ let nativePort = null;  // chrome.runtime.Port to the native host
 let pendingCallbacks = new Map();  // id -> callback for async native responses
 let nextCallbackId = 1;
 let stateLoaded = false;  // gate: don't inject until storage is loaded
+let cdpAvailable = false; // true if localhost:9222 responded (browser launched with --remote-debugging-port=9222)
 
 // ============================================================
 // STORAGE
@@ -48,6 +57,30 @@ async function saveState() {
     nb_nextProcessId: nextProcessId,
     nb_service_approved: serviceApproved
   });
+}
+
+// ============================================================
+// CDP AVAILABILITY CHECK
+// Extension-side check: tries to fetch localhost:9222/json to see
+// if the browser was launched with --remote-debugging-port=9222.
+// Result is stored in cdpAvailable and exposed via nb_cdp_status message.
+// ============================================================
+async function checkCdpAvailable() {
+  try {
+    const resp = await fetch('http://localhost:9222/json', { signal: AbortSignal.timeout(2000) });
+    if (resp.ok) {
+      const targets = await resp.json();
+      cdpAvailable = Array.isArray(targets);
+      console.log(`[NB] CDP check: available (${targets.length} targets)`);
+    } else {
+      cdpAvailable = false;
+      console.log('[NB] CDP check: port responded but not OK:', resp.status);
+    }
+  } catch (err) {
+    cdpAvailable = false;
+    console.log('[NB] CDP check: not available \u2014', err.message);
+  }
+  return cdpAvailable;
 }
 
 // ============================================================
@@ -228,63 +261,33 @@ function getProcesses() { return [...processes]; }
 function getRunningProcesses() { return processes.filter(p => p.status === 'running'); }
 
 // ============================================================
-// WMINJECT — OS-level injection via native host
-// The extension locates the input element and gathers its
-// accessibility info + Chrome window details. The native host
-// uses UI Automation to find and write to the exact element,
-// even when Chrome is in the background.
+// CDPINJECT \u2014 Chrome DevTools Protocol injection via native host
+//
+// The native host connects to Chrome's CDP endpoint (localhost:9222),
+// finds the target tab by URL or title, and uses Runtime.evaluate
+// to inject text into the input element. Works regardless of
+// foreground/background state. No SendInput, no keystrokes.
+//
+// Chrome must be launched with: --remote-debugging-port=9222
 // ============================================================
-async function wminject(text, tabId) {
-  console.log(`[NB] wminject: gathering element info from tab ${tabId}`);
+async function cdpinject(text, tabId) {
+  console.log(`[NB] cdpinject: getting tab info for tab ${tabId}`);
 
-  // Step 1: Ask content.js to locate the input element
-  let elementInfo;
-  try {
-    elementInfo = await chrome.tabs.sendMessage(tabId, { action: 'nb_locate_input' });
-  } catch (err) {
-    console.log('[NB] wminject: content script not reachable, element info unavailable');
-    elementInfo = { found: false };
-  }
-
-  // Step 2: Get Chrome window info (position, size, state)
+  // Get tab info so the host can find the right CDP target
   const tab = await chrome.tabs.get(tabId);
-  const win = await chrome.windows.get(tab.windowId);
 
-  // Step 3: Make sure this tab is the active tab in its window
-  // (UI Automation can only see the active tab's accessibility tree)
-  if (tab.id !== undefined) {
-    await chrome.tabs.update(tabId, { active: true });
-    // Small delay to let Chrome activate the tab and build the a11y tree
-    await new Promise(r => setTimeout(r, 300));
-  }
-
-  // Step 4: Send everything to the native host
   const hostMessage = {
-    op: 'wminject',
+    op: 'cdpinject',
     text: text,
-    // Chrome window info
-    windowState: win.state,       // "normal", "minimized", "maximized", "fullscreen"
-    windowLeft: win.left,
-    windowTop: win.top,
-    windowWidth: win.width,
-    windowHeight: win.height,
-    // Tab info
-    tabTitle: tab.title || '',
+    pageTitle: tab.title || '',
     tabUrl: tab.url || '',
-    tabIndex: tab.index,
-    // Element info from content.js
-    elementFound: elementInfo.found || false,
-    elementId: elementInfo.id || '',
-    elementRole: elementInfo.role || 'textbox',
-    elementAriaLabel: elementInfo.ariaLabel || '',
-    elementTag: elementInfo.tagName || 'div',
-    elementRect: elementInfo.rect || null,
-    pageTitle: elementInfo.pageTitle || tab.title || ''
+    autoSubmit: true,
+    cdpPort: 9222
   };
 
-  console.log('[NB] wminject: sending to native host:', hostMessage);
+  console.log('[NB] cdpinject: sending to native host:', hostMessage);
   const result = await sendToHost(hostMessage);
-  console.log('[NB] wminject: host response:', result);
+  console.log('[NB] cdpinject: host response:', result);
   return result;
 }
 
@@ -296,7 +299,7 @@ async function wminject(text, tabId) {
 function buildBriefing() {
   const L = [];
 
-  L.push('=== NAUGHTYBITS v2.0 SYSTEM BRIEFING ===');
+  L.push('=== NAUGHTYBITS v3.0 SYSTEM BRIEFING ===');
   L.push('');
   L.push('You have NaughtyBits installed \u2014 a persistent memory and process management companion extension.');
   L.push('It watches your output text in real time. When you write a /naughtybits command in your response,');
@@ -407,15 +410,15 @@ async function injectBriefingIntoTab(tabId) {
   const briefing = buildBriefing();
   console.log(`[NB] Injecting briefing into tab ${tabId} (${briefing.length} chars)`);
 
-  // Try wminject first if host is connected \u2014 works even in background
+  // Try CDP injection first if host is connected \u2014 works even in background
   if (serviceApproved && serviceConnected) {
-    console.log('[NB] Attempting wminject (OS-level) first...');
-    const wmResult = await wminject(briefing, tabId);
-    if (wmResult && wmResult.ok) {
-      console.log('[NB] wminject succeeded');
-      return { ok: true, method: 'wminject' };
+    console.log('[NB] Attempting CDP injection (via native host) first...');
+    const cdpResult = await cdpinject(briefing, tabId);
+    if (cdpResult && cdpResult.ok) {
+      console.log('[NB] CDP injection succeeded');
+      return { ok: true, method: 'cdpinject' };
     }
-    console.log('[NB] wminject failed, falling back to MAIN world injection:', wmResult);
+    console.log('[NB] CDP injection failed, falling back to MAIN world injection:', cdpResult);
   }
 
   // Fallback: MAIN world injection via chrome.scripting.executeScript
@@ -647,14 +650,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       break;
     }
 
-    // --- wminject (OS-level text injection via native host) ---
-    case 'nb_wminject': {
+    // --- CDP injection (via native host -> CDP -> Runtime.evaluate) ---
+    case 'nb_wminject':
+    case 'nb_cdpinject': {
       const tabId = request.tabId || (sender.tab && sender.tab.id);
       if (!tabId) {
-        sendResponse({ ok: false, error: 'No tab ID for wminject' });
+        sendResponse({ ok: false, error: 'No tab ID for cdpinject' });
         break;
       }
-      wminject(request.text, tabId).then(r => sendResponse(r));
+      cdpinject(request.text, tabId).then(r => sendResponse(r));
       return true;
     }
 
@@ -703,6 +707,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       break;
     }
 
+    // --- CDP status (for popup warning) ---
+    case 'nb_cdp_status': {
+      checkCdpAvailable().then(available => {
+        sendResponse({ ok: true, cdpAvailable: available });
+      });
+      return true;
+    }
+
     // --- State dump for popup ---
     case 'nb_get_state': {
       sendResponse({
@@ -711,7 +723,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         processes: getProcesses(),
         running: getRunningProcesses(),
         serviceApproved,
-        serviceConnected
+        serviceConnected,
+        cdpAvailable
       });
       break;
     }
@@ -729,5 +742,7 @@ loadState().then(() => {
   if (serviceApproved) {
     checkHostHealth();
   }
+  // Check CDP on startup so the popup can warn immediately
+  checkCdpAvailable();
 });
-console.log('[NB] Background service worker v2.1.0 started');
+console.log('[NB] Background service worker v3.0.0 started');
